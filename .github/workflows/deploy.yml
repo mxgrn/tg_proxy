@@ -1,0 +1,61 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    name: Build and Deploy
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log into GHCR
+        run: echo "${{secrets.GITHUB_TOKEN}}" | docker login https://ghcr.io -u ${{github.actor}} --password-stdin
+
+      - name: Build and push
+        uses: docker/build-push-action@v4
+        with:
+          push: true
+          tags: ghcr.io/mxgrn/tg_proxy:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: deploy
+          key: ${{ secrets.DEPLOYMENT_KEY }}
+          script_stop: true
+          script: |
+            echo "Logging into GHCR..."
+            echo "${{secrets.GITHUB_TOKEN}}" | docker login https://ghcr.io -u ${{github.actor}} --password-stdin
+
+            echo "Pulling latest image..."
+            docker pull ghcr.io/mxgrn/tg_proxy:latest
+
+            echo "Stopping existing container..."
+            docker stop tg_proxy || true
+            docker rm tg_proxy || true
+
+            echo "Starting new container..."
+            docker run --name=tg_proxy -d \
+              --restart unless-stopped \
+              --network host \
+              -e PROXY_PORT=${{ secrets.PROXY_PORT }} \
+              -e TARGET_HOST=localhost \
+              -e TARGET_PORT=${{ secrets.TARGET_PORT }} \
+              ghcr.io/mxgrn/tg_proxy:latest
+
+            echo "Waiting for service to be healthy..."
+            timeout 30 sh -c 'until curl -f http://localhost:${{ secrets.PROXY_PORT }}/health 2>/dev/null; do sleep 1; done' || true
+
+            echo "Deployment complete!"

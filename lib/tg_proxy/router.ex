@@ -1,6 +1,7 @@
 defmodule TgProxy.Router do
   use Plug.Router
   
+  plug TgProxy.HealthCheck
   plug :match
   plug :dispatch
   
